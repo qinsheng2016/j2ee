@@ -20,15 +20,16 @@ public class BioServer {
         } catch (IOException e) {
             e.printStackTrace();
         }
-
+        System.out.println("server up use 9090!");
         while (true) {
             try {
                 System.in.read(); // 阻塞
                 Socket client = serverSocket.accept();
+                System.out.println("client port: " + client.getPort());
 
                 new Thread(() -> {
-                    try {
-                        while(true){
+                    while(true){
+                        try {
                             InputStream in = client.getInputStream();
                             BufferedReader reader = new BufferedReader(new InputStreamReader(in));
 
@@ -44,13 +45,19 @@ public class BioServer {
                                 client.close();
                                 break;
                             }
+                        } catch (IOException e) {
+                            e.printStackTrace();
                         }
-                    } catch (IOException e) {
-                        e.printStackTrace();
                     }
-                });
+                }).start();
             } catch (IOException e) {
                 e.printStackTrace();
+            } finally {
+                try {
+                    serverSocket.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
     }
