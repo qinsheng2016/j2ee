@@ -6,7 +6,7 @@
 
 VFS借助它四个主要的数据结构即超级块、索引节点、目录项和文件对象以及一些辅助的数据结构，向Linux中不管是普通的文件还是目录、设备、套接字等 都提供同样的操作界面，如打开、读写、关闭等。只有当把控制权传给实际的文件系统时，实际的文件系统才会做出区分，对不同的文件类型执行不同的操作。由此 可见，正是有了VFS的存在，跨文件系统操作才能执行，Unix/Linux中的“一切皆是文件”的口号才能够得以实现。
 
-![图片示例_VFS在内核中与其他的内核模块的协同关系](image/3.jpg)
+![3](images/3.jpg)
 
 案例：通过自己创建磁盘镜像文件，挂载到vfs目录中，进行目录文件操作
 
@@ -51,7 +51,7 @@ read a <& 6
 lsof -op &&
 ```
 
-![clipboard](image/clipboard.png)
+![clipboard](images/clipboard.png)
 
 #### 重定向机制：
 
@@ -134,7 +134,7 @@ echo $BASHPID | cat
 { echo $BASHPID; read x; } | { cat; echo $BASHPID; read y; }
 ```
 
-![clipboard1](image/clipboard1.png)
+![](/clipboard1.png)
 
 ```bash
 # 新开一个窗口，执行
@@ -143,7 +143,7 @@ ps -fe | grep 2622
 cd /proc/4073/fd
 ```
 
-![clipboard4](image/clipboard4.png)
+![](images/clipboard4.png)
 
 ### PageCache
 
@@ -153,7 +153,7 @@ PageCache是内核的折中方案，由内核维护，是一个中间层，APP�
 
 当App1处于running状态，执行过程中需要读取数据，这时就需要访问内核了，如果内核中的pageCache可以命中请求的数据，则直接返回，如果pageCache里没有，就会触发缺页中断，去磁盘里取，（内核也是一个程序，访问内核需要一个0x80中断，十进制中是128，二进制就是1000 0000，这个值是要放到CPU的寄存器中里，和内核里的中断向量表做匹配，这个表里可以理解为有0-255，这么多key，128这里有一个callback方法）此时会对App1保护现场，将App1置成挂起状态，CPU从用户态切到内核态，然后通过DMA从磁盘里将数据拷贝到pageCache中，再返回到App1，在数据拷贝完成后，也会触发一个中断程序，将App1恢复现场，置成running状态，此时App1数据已经取回，且处于running状态，CPU可以继续执行了
 
-![](image/read.png)
+![read](images/read.png)
 
 
 
@@ -303,7 +303,7 @@ public class OSFileIO {
 
 
 
-![image-20200616001743698](image/image-20200616001743698.png)
+![](images/image-20200616001743698.png)
 
 ## 内存和IO的关系
 
