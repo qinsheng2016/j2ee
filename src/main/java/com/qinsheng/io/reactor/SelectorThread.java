@@ -41,9 +41,9 @@ public class SelectorThread implements Runnable{
             try {
                 // 如果不传参数，selector.select()是阻塞，那么往下执行的时候，nums必然大于0
                 // 1,select()
-                System.out.println(Thread.currentThread().getName() + " - before select, select.length: " + selector.keys().size());
+//                System.out.println(Thread.currentThread().getName() + " - before select, select.length: " + selector.keys().size());
                 int nums = selector.select();
-                System.out.println(Thread.currentThread().getName() + " - after select, select.length: " + selector.keys().size());
+//                System.out.println(Thread.currentThread().getName() + " - after select, select.length: " + selector.keys().size());
                 // 2,如果nums大于0，处理selectKeys
                 if (nums > 0) {
                     Set<SelectionKey> keys = selector.selectedKeys();
@@ -93,8 +93,7 @@ public class SelectorThread implements Runnable{
     }
 
     public void readHandler(SelectionKey key) {
-        System.out.println("read handler.......");
-
+        System.out.println(Thread.currentThread().getName() + "   read handler.......");
         SocketChannel client = (SocketChannel) key.channel();
         ByteBuffer buffer = (ByteBuffer)key.attachment();
         buffer.clear();
@@ -121,5 +120,9 @@ public class SelectorThread implements Runnable{
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    public void setWorker(SelectorThreadGroup group) {
+        this.group = group;
     }
 }
