@@ -18,11 +18,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class SelectorThread implements Runnable{
 
     Selector selector = null;
+    SelectorThreadGroup group = null;
 
     LinkedBlockingQueue<Channel> queue = new LinkedBlockingQueue();
 
-    SelectorThread() {
+    SelectorThread(SelectorThreadGroup group) {
         try {
+            this.group = group;
             selector = Selector.open();
 
         } catch (IOException e) {
@@ -39,9 +41,9 @@ public class SelectorThread implements Runnable{
             try {
                 // 如果不传参数，selector.select()是阻塞，那么往下执行的时候，nums必然大于0
                 // 1,select()
-                System.out.println("before select, select.length: " + selector.keys().size());
+                System.out.println(Thread.currentThread().getName() + " - before select, select.length: " + selector.keys().size());
                 int nums = selector.select();
-                System.out.println("after select, select.length: " + selector.keys().size());
+                System.out.println(Thread.currentThread().getName() + " - after select, select.length: " + selector.keys().size());
                 // 2,如果nums大于0，处理selectKeys
                 if (nums > 0) {
                     Set<SelectionKey> keys = selector.selectedKeys();
@@ -78,12 +80,46 @@ public class SelectorThread implements Runnable{
 
 
     public void acceptHandler(SelectionKey key) {
-        System.out.println("accept handler.......");
+        System.out.println(Thread.currentThread().getName() + "   accept handler.......");
+        ServerSocketChannel server = (ServerSocketChannel) key.channel();
+        try {
+            SocketChannel client = server.accept();
+            client.configureBlocking(false);
 
-
+            group.nextSelector(client);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     public void readHandler(SelectionKey key) {
         System.out.println("read handler.......");
+
+        SocketChannel client = (SocketChannel) key.channel();
+        ByteBuffer buffer = (ByteBuffer)key.attachment();
+        buffer.clear();
+        int read = 0;
+
+        try {
+            while (true) {
+                read = client.read(buffer);
+                if(read > 0) {
+                    buffer.flip();
+                    while (buffer.hasRemaining()) {
+                        client.write(buffer);
+                    }
+                    buffer.clear();
+                } else if (read == 0) {
+                    break;
+                } else {
+                    // 对方close断开了
+                    // close和不做close 在关闭后可以通过netstat -natp查看不同的连接
+                    client.close();
+                    break;
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }

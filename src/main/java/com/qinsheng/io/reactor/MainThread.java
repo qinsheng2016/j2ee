@@ -9,7 +9,7 @@ public class MainThread {
     public static void main(String[] args) {
 
         // 创建几个selector thread
-        SelectorThreadGroup group = new SelectorThreadGroup(1);
+        SelectorThreadGroup group = new SelectorThreadGroup(3);
         group.bind(9999);
 
     }

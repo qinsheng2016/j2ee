@@ -2,6 +2,7 @@ package com.qinsheng.io.reactor;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.channels.Channel;
 import java.nio.channels.ServerSocketChannel;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -17,7 +18,7 @@ public class SelectorThreadGroup {
     public SelectorThreadGroup(int num) {
         selectorThreads = new SelectorThread[num];
         for(int i=0; i<selectorThreads.length; i++) {
-            selectorThreads[i] = new SelectorThread();
+            selectorThreads[i] = new SelectorThread(this);
             new Thread(selectorThreads[i]).start();
         }
     }
@@ -36,7 +37,7 @@ public class SelectorThreadGroup {
 
     }
 
-    private void nextSelector(ServerSocketChannel server) {
+    public void nextSelector(Channel server) {
         int index = xid.incrementAndGet() % selectorThreads.length;
         SelectorThread selectorThread = selectorThreads[index];
 
