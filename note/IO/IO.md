@@ -355,6 +355,209 @@ BIO存在的问题：数据的多次拷贝，多次阻塞，连接数多的情�
 
 #### NIO
 
+因为BIO存在的阻塞问题以及过多的创建线程导致进程调度严重消耗CPU，引入了NIO的概念。
+
+NIO是通过一个或几个线程，来解决N个IO连接的处理问题，NIO的处理步骤
+
+socket // 创建一个新的文件描述符fd3
+
+bind(fd3, 9090)
+
+listen(fd3)
+
+fd3 nonblocking // 非阻塞模式
+
+while不停对监听端口循环，如果没有连接，返回-1，可不作处理，如果产生连接，会创建一个新的文件描述符fd4
+
+ fd4  nonblocking // 非阻塞模式
+
+while不停对已经产生的连接循环，如果有数据，recv(fd4)
+
+NIO存在的问题：
+
+每循环一次，O(n)复杂度recv，很多的系统调用read是无意义的，在不停的遍历过程中，CPU在用户态内核态中的切换消耗太大。
+
+#### 多路复用器
+
+多路复用器，指多条路(IO通道)通过一个系统调用，获得其中的IO状态，然后由程序自己对有状态的IO进行R/W。
+
+因为是程序自己读写，多路复用器也是同步的。
+
+##### select，poll
+
+这个遍历的过程触发了一次系统调用，也只有一次用户态和内核态的切换，由用户态将fds传递给内核，内核根据用户这次调用传过来的fds，遍历，修改状态。
+
+这里依旧存在问题：1，每次都需要重复的传递fds到内核，2，每次，内核被调用之后，针对这次调用，都需要触发一个遍历fds全量的复杂度。
+
+##### epoll
+
+针对select，poll存在的问题，引入了epoll，在内核中开辟空间，用红黑树来保存fds的信息，以及一个链表用来维护有状态的fds的信息。
+
+epoll的工作流程：
+
+1，epoll_create，在走完socket，bind，listen得到FD4三步过后，调用了内核的epoll_create，在内存中会开辟空间，假如是FD6，这个空间里会放红黑树，会返回一个EPFD，epoll_create只会调用一次。
+
+2，epoll_ctl，对fd6里fd进行维护，比如这里有参数(fd6, add, fd4)，增加fd4到红黑树中，红黑树中就有一个数据fd4。
+
+3，epoll_wait，在创建红黑树及给红黑树中放入了fd后，如果需要读取数据，直接从内核中的一个链表读取数据，这个链表的生成，是由网卡中断的callback方法延伸去做的事情，将从网卡中读取到的client传过来的数据放到fd4 buffer中后，同时将fd4 clone放到了链表里。
+
+这样的处理方式，就同时规避了获取数据时需要传入全量的fds(因为在红黑树中已经维护了这个数据)，再在内核中进行fds的遍历，直接调用内核的epoll_wait从链表中拿数据就行了。
+
+##### Select, Poll	V.S	Epoll
+
+![image-20200625232643049](images/image-20200625232643049.png)
+
+由上图描述下Epoll和Select/Poll的区别：
+
+1，Epoll需要内核有额外的支持，而在Select/Poll中只需要基本的网卡中断，保存数据。
+
+2，在内核中，即使用户程序不调用内核，内核也会随着中断完成所有FD的状态设置，不过在Select/Poll中，什么时候调用select，内核什么时候遍历fds并修正状态，而在epoll中，内核程序会在红黑树中放过一些Fd，伴随内核基于中断处理完fd的buffer，状态之后，会有一个延伸操作，继续把有状态的fd，copy到链表中，所以用户程序只需调用epoll_wait，就能即时取走数据，不用等待内核的遍历。这里的epoll_wait其实等同于Select/Poll中的select方法。
+
+##### 同一套Java代码在poll，epoll下不同的底层实现
+
+```java
+public class SocketMultiplexingSingleThreadV1 {
+
+    private ServerSocketChannel server = null;
+    private Selector selector = null;
+    int port = 9090;
+
+    public void initServer() {
+        try {
+            // 三步曲
+            server = ServerSocketChannel.open();
+            server.configureBlocking(false);
+            server.bind(new InetSocketAddress(port)); // bind & listen
+
+            // 如果是在epoll模型下，这里的open就会在内核中调用epoll_create，产生文件描述符fd3
+            // 在java中，对三种多路复用器，都是使用的Selection.open()打开，默认是Epoll，可以-D修改.
+            selector = Selector.open();
+
+            // server约等于listen状态的fd4，这里哪来的fd4，需要再看
+            // 如果是select, poll，这里会在jvm中开辟一个数组，把fd4放进去，这里是native方法实现的
+            // 如果是epoll，这里就调用的是内核中的epoll_ctl(fd3, ADD, fd4)
+            server.register(selector, SelectionKey.OP_ACCEPT);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void start() {
+        initServer();
+        System.out.println("服务器启动了。。。");
+        try {
+            while (true) {
+                Set<SelectionKey> keys = selector.keys();
+                System.out.println("size: " + keys.size());
+
+                // 调用多路复用器（select，poll or epoll epoll_wait）
+                // 如果是select，poll，其实是内核中的select(fd4),poll(fd4);
+                // 如果是epoll，这里调用的就是内核中的epoll_wait方法
+                while (selector.select(500) > 0) {
+                    Set<SelectionKey> selectionKeys = selector.selectedKeys();  // 返回所有的fd集合
+
+                    // 取得所有的fd集合后，一个一个去处理，所以是同步的。
+                    // 如果是NIO，这里需要对每个fd进行系统调用，在使用多路复用器后，只需要一次select方法就能得到具体的哪些需要R/W了。
+                    Iterator<SelectionKey> iterable = selectionKeys.iterator();
+                    while (iterable.hasNext()) {
+                        SelectionKey key = iterable.next();
+                        iterable.remove();
+
+                        if(key.isAcceptable()) {
+                            // 这里很重要，这里是去接受一个新的连接了，accept 应该接收连接，并返回一个新连接的FD
+                            // 在select，poll中，因为在内核中没有空间，所以会在jvm中，把新的fd和之前的fd4的那个listen放在一起
+                            // 在epoll中，则是通过epoll_ctl把新的客户端连接fd注册到内核空间，就是红黑树fd3中。
+                            acceptHandler(key);
+                        } else if(key.isReadable()) {
+                            // 在当前线程，这个方法可能是阻塞的，引入IO Thread
+                            // redis是不是用了epoll，是不是有个io threads的概念，是不是单线程的
+                            // tomcat 8，9 异步的处理方式，实现IO和处理上的解耦
+                            readHandler(key);
+                        }
+                    }
+                }
+
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void acceptHandler(SelectionKey key) {
+        try {
+            ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
+            SocketChannel client = ssc.accept();   // 目的是调用accept客户端，fd7
+            client.configureBlocking(false);
+
+            ByteBuffer buffer = ByteBuffer.allocate(8192);
+
+            client.register(selector, SelectionKey.OP_READ, buffer);
+            System.out.println("-------------------------------------------------");
+            System.out.println("新客户端：" + client.getRemoteAddress());
+            System.out.println("-------------------------------------------------");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void readHandler(SelectionKey key) {
+        SocketChannel client = (SocketChannel) key.channel();
+        ByteBuffer buffer = (ByteBuffer)key.attachment();
+        buffer.clear();
+        int read = 0;
+
+        try {
+            while (true) {
+                read = client.read(buffer);
+                if(read > 0) {
+                    buffer.flip();
+                    while (buffer.hasRemaining()) {
+                        client.write(buffer);
+                    }
+                    buffer.clear();
+                } else if (read == 0) {
+                    break;
+                } else {
+                    // 对方close断开了
+                    // close和不做close 在关闭后可以通过netstat -natp查看不同的连接
+                    client.close();
+                    break;
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void main(String[] args) {
+        SocketMultiplexingSingleThreadV1 service = new SocketMultiplexingSingleThreadV1();
+        service.start();
+    }
+
+}
+```
+
+poll的底层实现：
+
+![](images/image-20200626042734274.png)
+
+epoll的底层实现：
+
+![image-20200626042754473](images/image-20200626042754473.png)
+
+##### 单线程多路复用器
+
+在多路复用器中，readHandler(key)方法可能会阻塞，如果是单线程，这会影响所有其他连接的处理
+
+##### 多线程多路复用器
+
+由于单线程多路复用器的问题，可以考虑引入readHandler(key)方法中，使用新创建一个线程来进行处理，但是这里会引入一个新的问题，在readHandler(key)中，除了处理当前key中的read，还需要给当前key中注册writer事件，这时在writeHandler(key)方法中，需要调用 key.cancel()方法，否则会进入死循环，一直不停地调用write事件。这里的register,cancel都是需要调用系统内核的epoll_ctl(ADD or DEL)方法，不断的系统调用又会导致内核资源的浪费，引入了一个新的问题：如果能既利用多核CPU能力，使用多线程，又可以不用不断地进行register，cancel来触发系统调用。
+
+*这里的registe，cancel添加和删除的是红黑树里维护的文件描述符，是不会影响内核里的。
+
+为了解决以上问题，引入了Group的概念，如果N个文件描述符需要R/W处理时，将N个FD进行分组，每组一个单独的selector，将一个selector压到一个线程上，每个selector都是串行处理，这样既可以尽大可能地利用CPU资源，又能不用重复的进行register，cancel。一般最好的线程数为CPU核数或两倍。
+
 
 
 ## 参考资料
