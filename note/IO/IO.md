@@ -134,7 +134,7 @@ echo $BASHPID | cat
 { echo $BASHPID; read x; } | { cat; echo $BASHPID; read y; }
 ```
 
-![](/clipboard1.png)
+![]( images/clipboard1.png)
 
 ```bash
 # 新开一个窗口，执行
