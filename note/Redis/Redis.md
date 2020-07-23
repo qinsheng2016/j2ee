@@ -583,12 +583,27 @@ fock是Linux系统调用，创建子进程速度快，创建时不会复制数�
 
 配置文件中给出bgsave的规则，是save这个标识，这里有瑕疵：
 
-``` bash
+另外如果Redis是正常退出，非意外退出（断电等），那么在退出前会也会将数据写入rdb文件中。
+
+```bash
+# rdb配置文件
 save 900 1	# 满足条件900秒且更新了1条，就会写入磁盘
 save 300 10		# 300秒且更新了10条
 save 60 10000		# 60秒且更新了10000条
 dbfilename dump.rdb	# 保存在磁盘中的文件名
 dir /var/lib/redis/6379	# 文件目录
+
+# rdb存储默认即为开启模式，如果希望关闭，可以设置save ""
+save ""
+```
+
+#### 基本命令
+
+``` bash
+# 保存命令，在没有满足配置文件中的save条件时，也可以手动保存
+save	# 阻塞保存
+bgsave # 非阻塞保存，另起线程
+redis-check-rdb dump.rdb	# 查看rdb文件
 ```
 
 #### 弊端
@@ -603,39 +618,9 @@ dir /var/lib/redis/6379	# 文件目录
 
 ### AOF
 
-AOF(Append Only File)是将redis的写操作都记录到文件中
+AOF(Append Only File)是将redis的写操作都记录到文件中，在恢复数据时，将记录的命令再重新执行一遍，即可恢复数据，RDB和AOF是可以同时开启的，但是如果开启了AOF，在恢复数据的时候只会用AOF恢复，在4.0版本以后，AOF中包含RDB全量和新的写操作日志，恢复数据时丢失会更少一些。
 
-#### 优点
-
-**丢失数据少**
-
-#### 弊端
-
-体量无限变大，数据恢复慢
-
-### RDB & AOF
-
-在Redis中，RDB和AOF是可以同时开启的，但是如果开启了AOF，在恢复数据的时候只会用AOF恢复，在4.0版本以后，AOF中包含RDB全量和新的写操作日志，恢复数据时丢失会更少一些
-
-因为AOF的缺点，体量无限变大，这里引入了重写的概念：
-
-在4.0前，重写时会删除抵消的命令，合并重复的命令，但是最终得到的也是一个纯指令的日志文件。
-
-```bash
-# 抵消命令
-set k1 a
-delete k1
-set k1 b
-delete k1
-
-# 重复命令
-lpush k1 a
-lpush k1 b
-```
-
-在4.0后，重写时会将老的数据RDB到AOF文件中，将增量的以指令的方式append到AOF文件中，得到一个混合体AOF文件，利用了RDB的快和日志的全量。
-
-再回到原点，由于Redis是内存数据库，写操作是会触发IO的，以下是AOF相关的redis配置。
+#### AOF相关配置
 
 ```bash
 appendonly yes	# 打开aof存储
@@ -643,7 +628,7 @@ appendfilename "appendonly.aof"	# aof存储文件名
 
 no-appendfsync-on-rewrite yes
 
-auto-aof-rewrite-percentage 100	 # 重写后，min-size增加100%，猜的
+auto-aof-rewrite-percentage 100	 # 重写后，min-size增加100%
 auto-aof-rewrite-min-size 64mb	# 在文件大小达到64m时进行重写
 
 appendfsync always	# 每写一条数据，就向日志记录一次
@@ -651,13 +636,112 @@ appendfsync everysec	# 每一秒向日志中记录一次
 appendfsync no	# 从来不主动flush
 ```
 
-#### 实验
+#### 基本命令
 
 ```bash
-# 基本命令
 bgrewriteaof	# 重写
-redis-check-rdb dump.rdb	# 查看rdb文件
 ```
+
+#### 优点
+
+**丢失数据少**
+
+#### 弊端
+
+**体量无限变大，数据恢复慢**
+
+##### 解决办法 - 重写
+
+在4.0前，重写时会删除抵消的命令，合并重复的命令，但是最终得到的也是一个纯指令的日志文件。
+
+在4.0后，重写时会将老的数据RDB到AOF文件中，将增量的以指令的方式append到AOF文件中，得到一个混合体AOF文件，利用了RDB的快和日志的全量。
+
+### 混合模式
+
+在Redis4.0后，可以集合RDB和AOF的优点，生成混合体AOF文件，包含二进制RDB文件和增量的AOF日志。
+
+#### 相关配置
+
+```bash
+ aof-use-rdb-preamble yes # 打开混合模式
+```
+
+### 实验
+
+```bash
+# RDB	实验，关闭aof，不会生成aof文件
+set k1 aaa
+set k2 bbb
+save # 查看log文件和rdb文件
+bgsave # 提示后台正在写入磁盘
+```
+
+```bash
+# AOF 实验，打开aof，但是关闭混合模式
+set k1 aaa
+set k1 bbb
+set k2 ddd
+set k3 abc
+delete k3 # aof文件中会记录这些操作
+bgrewriteaof # 重写，aof文件会变小
+```
+
+```bash
+# 混合模式实验	打开aof，打开混合模式
+set k1 aaa
+set k2 bbb
+set k3 abcde	# 查看rdb文件没有变化，aof文件有记录产生
+save # rdb文件发生变化，aof不变
+set k1 ccc
+set k1 abcde
+del k3	# rdb文件没有变化，aof文件追加记录了，文件继续变大
+bgrewriteaof # 重写，aof文件会以rdb存储，节省很多计算和存储空间
+set k3 aaaaa # aof文件会在rdb存储中追加日志记录
+```
+
+# Redis集群
+
+在以上的内容中，介绍的是Redis全是单机单进程的应用，但是只要是单机，就会存在三个问题
+
+单点故障，容量有限，压力
+
+## 相关概念
+
+### AKF
+
+可扩展的系统架构设计有一个理念，通过加机器，一变多来解决容量和可用性问题，AKF是一个更加系统的可扩展模型，通过X，Y，Z轴按不同需求进行扩展
+
+X：全量 - 镜像	集群，所以节点的数据应该保持一致
+
+Y：业务，功能，不同节点间负责不同的业务功能，商品管理，订单管理，用户管理等等
+
+Z：数据分区 关注服务和数据的优先级划分，比如按地域划分
+
+但由机器的一变多，必然引发的问题，数据一致性问题。
+
+### CAP
+
+#### 一致性 
+
+数据的一致性 Consistency，又可以分为以下几种
+
+#### 可用性 Availability
+
+#### 分区容错性 Partition Tolerance
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
